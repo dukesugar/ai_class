@@ -1,0 +1,141 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Input, Dense
+from tensorflow.keras.optimizers import Adam
+
+# 1. 데이터 로드 및 전처리
+
+df = pd.read_csv('../DSA_features.csv')
+df
+
+# activity 열에 포함된 고유한 값(활동 유형) 확인
+unique_activities = df['activity'].unique()
+print(unique_activities)
+
+
+# lyingRight, lyingBack (정상), stepper (비정상) 데이터 필터링
+df = df[df['activity'].isin(['lyingRight', 'lyingBack', 'stepper'])]
+
+# 정상: 0 (lying), 비정상: 1 (stepper) 라벨 설정
+df['label'] = df['activity'].apply(lambda x: 0 if x in ['lyingRight', 'lyingBack'] else 1)
+
+# 라벨과 사람 ID, 활동명을 제외한 피처만 선택
+features = df.drop(['activity', 'label', 'people'], axis=1)
+labels = df['label'].values
+
+
+# 2. 데이터 정규화 및 학습/테스트 분할
+# 데이터 정규화
+scaler = StandardScaler()
+features_scaled = scaler.fit_transform(features)
+
+# 정상 데이터만으로 학습 데이터 구성
+train_data = features_scaled[labels == 0]
+
+# 테스트 데이터 전체
+test_data = features_scaled
+test_labels = labels
+
+
+# 3. Autoencoder 모델 정의 및 학습
+from tensorflow.keras.layers import Input, Dense
+from tensorflow.keras.models import Model
+
+# Autoencoder 모델 정의
+input_dim = train_data.shape[1]
+
+# 입력 레이어
+input_layer = Input(shape=(input_dim,))
+
+# 인코더
+encoder = Dense(64, activation="relu")(input_layer)
+encoder = Dense(32, activation="relu")(encoder)
+encoder = Dense(16, activation="relu")(encoder)
+
+# 잠재 공간
+latent_space = Dense(16, activation="relu")(encoder)
+
+# 디코더
+decoder = Dense(32, activation="relu")(latent_space)
+decoder = Dense(64, activation="relu")(decoder)
+
+# 출력 레이어
+output_layer = Dense(input_dim, activation="linear")(decoder)
+
+# 모델 정의
+autoencoder = Model(inputs=input_layer, outputs=output_layer)
+
+# 모델 컴파일
+autoencoder.compile(optimizer='adam', loss='mse')
+
+# 모델 학습
+autoencoder.fit(train_data, train_data, epochs=50, batch_size=32, shuffle=True, validation_split=0.1)
+
+
+
+
+# 4. 테스트 데이터에서 재구성 오류 계산
+# Autoencoder를 통해 재구성 오류 계산
+test_predictions = autoencoder.predict(test_data)
+mse = np.mean(np.power(test_data - test_predictions, 2), axis=1)
+
+
+# 5. 임계값 설정 및 비정상 데이터 분류
+# 임계값 설정 (예: 정상 데이터의 95번째 백분위수)
+threshold = np.percentile(mse[labels == 0], 95)
+
+# 예측: 임계값보다 큰 오류는 비정상(1), 작은 오류는 정상(0)으로 분류
+predictions = [1 if error > threshold else 0 for error in mse]
+
+
+
+#6. 정확도 평가
+
+# 정확도 계산
+from sklearn.metrics import accuracy_score
+
+accuracy = accuracy_score(test_labels, predictions)
+print("Autoencoder Model Accuracy: {:.2f}%".format(accuracy * 100))
+
+
+#7. 시각화
+
+import matplotlib.pyplot as plt
+import pandas as pd
+import numpy as np
+
+# 테스트 데이터를 Autoencoder로 예측하여 재구성된 값을 생성
+test_predictions = autoencoder.predict(test_data)
+# 재구성 오차(MSE) 계산
+mse = np.mean(np.power(test_data - test_predictions, 2), axis=1)
+
+# 재구성 오차와 실제 클래스(정상/비정상)를 포함한 데이터프레임 생성
+error_df = pd.DataFrame({'reconstruction_error': mse, 'true_class': test_labels})
+
+# 재구성 오차의 임계값 설정
+threshold = np.percentile(mse[labels == 0], 95)  # 95번째 백분위수 사용
+print(f"Threshold for anomaly detection: {threshold}")
+
+# 'true_class' 기준으로 데이터를 그룹화하여 시각화
+groups = error_df.groupby('true_class')
+fig, ax = plt.subplots(figsize=(10, 6))
+
+# 정상과 비정상 데이터 그룹을 순회하며 그래프에 플롯
+for name, group in groups:
+    ax.plot(group.index, group.reconstruction_error, 
+            marker='o', ms=3.5, linestyle='',
+            label="Anomalous" if name == 1 else "Normal")
+
+# 임계값 선 추가
+ax.hlines(threshold, ax.get_xlim()[0], ax.get_xlim()[1], colors="r", zorder=100, label='Threshold')
+
+# 그래프 제목, 레이블 및 범례 설정
+ax.legend()
+plt.title("Reconstruction Error for Normal and Anomalous Activities")
+plt.ylabel("Reconstruction Error")
+plt.xlabel("Data Point Index")
+plt.show()
